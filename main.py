@@ -1,9 +1,8 @@
 import torch
 from torch.utils.data import TensorDataset, DataLoader
 
-from model_architecture import VGG, ResNet
+from model_architecture import VGG, ResNet, NetworkConstructorsAdaptive
 import utils
-import NetworkConstructorsAdaptive
 import AttackWrappersAdaptiveBlackBox
 
 
