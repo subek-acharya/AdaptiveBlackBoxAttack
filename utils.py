@@ -1,6 +1,118 @@
 import torch
 import torch.nn as nn
+from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
+
+# ------------ Voters specific utils -----------------
+
+def GetVoterValidation(batchSize):
+    valData = torch.load("./data/kaleel_final_dataset_val_OnlyBubbles_Grayscale.pth", weights_only=False)
+    valImages = valData["data"].float()
+    valLabels = valData["binary_labels"].long()
+    
+    valDataset = TensorDataset(valImages, valLabels)
+    valLoader = DataLoader(valDataset, batch_size=batchSize, shuffle=False)
+    return valLoader
+
+def GetVoterTrainingBalanced(batchSize, totalSamples, numClasses):
+    trainData = torch.load("./data/kaleel_final_dataset_train_OnlyBubbles_Grayscale.pth", weights_only=False)
+    trainImages = trainData["data"].float()
+    trainLabels = trainData["binary_labels"].long()
+    
+    # Calculate samples per class
+    samplesPerClass = totalSamples // numClasses
+    
+    # Get shape of images
+    imgShape = trainImages[0].shape
+    
+    # Initialize tensors for balanced data
+    balancedImages = torch.zeros(totalSamples, imgShape[0], imgShape[1], imgShape[2])
+    balancedLabels = torch.zeros(totalSamples)
+    
+    # Track how many samples we've collected per class
+    classCount = torch.zeros(numClasses)
+    
+    # Collect balanced samples
+    currentIndex = 0
+    for i in range(len(trainLabels)):
+        label = int(trainLabels[i])
+        
+        # Check if we still need samples from this class
+        if classCount[label] < samplesPerClass:
+            balancedImages[currentIndex] = trainImages[i]
+            balancedLabels[currentIndex] = label
+            classCount[label] += 1
+            currentIndex += 1
+        
+        # Check if we have enough samples
+        if currentIndex >= totalSamples:
+            break
+    
+    # Verify we got enough samples
+    for c in range(numClasses):
+        if classCount[c] != samplesPerClass:
+            raise ValueError(f"Not enough samples for class {c}. Got {int(classCount[c])}, needed {samplesPerClass}")
+    
+    print(f"Balanced training data: {totalSamples} samples ({samplesPerClass} per class)")
+    
+    # Create dataloader
+    balancedDataset = TensorDataset(balancedImages, balancedLabels.long())
+    balancedLoader = DataLoader(balancedDataset, batch_size=batchSize, shuffle=True)
+    
+    return balancedLoader
+
+# Calculate and print class-wise accuracy for a given model and dataloader
+def calculateClasswiseAccuracy(dataLoader, model, device, numClasses):
+    model.eval()
+    
+    # Initialize counters for each class
+    correct_per_class = {i: 0 for i in range(numClasses)}
+    total_per_class = {i: 0 for i in range(numClasses)}
+    
+    with torch.no_grad():
+        for inputs, labels in dataLoader:
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+            
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs, 1)
+            
+            # Count correct predictions per class
+            for label, pred in zip(labels, predicted):
+                label_idx = label.item()
+                total_per_class[label_idx] += 1
+                if label_idx == pred.item():
+                    correct_per_class[label_idx] += 1
+    
+    # Calculate accuracies
+    classwise_acc = {}
+    print(f"\n{'='*50}")
+    print(f"Class-wise Accuracy")
+    print(f"{'='*50}")
+    print(f"{'Class':<10} {'Correct':<10} {'Total':<10} {'Accuracy':<10}")
+    print(f"{'-'*50}")
+    
+    total_correct = 0
+    total_samples = 0
+    
+    for cls in range(numClasses):
+        if total_per_class[cls] > 0:
+            acc = correct_per_class[cls] / total_per_class[cls]
+        else:
+            acc = 0.0
+        classwise_acc[cls] = acc
+        total_correct += correct_per_class[cls]
+        total_samples += total_per_class[cls]
+        
+        print(f"{cls:<10} {correct_per_class[cls]:<10} {total_per_class[cls]:<10} {acc:.4f}")
+    
+    overall_acc = total_correct / total_samples if total_samples > 0 else 0.0
+    print(f"{'-'*50}")
+    print(f"{'Overall':<10} {total_correct:<10} {total_samples:<10} {overall_acc:.4f}")
+    print(f"{'='*50}\n")
+    
+    return overall_acc, classwise_acc
+# --------------------------------------------
 
 #Convert a dataloader into x and y tensors 
 def DataLoaderToTensor(dataLoader):
@@ -174,55 +286,3 @@ class MyDataSet(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.x)
-
-# Calculate and print class-wise accuracy for a given model and dataloader
-def calculateClasswiseAccuracy(dataLoader, model, device, numClasses):
-    model.eval()
-    
-    # Initialize counters for each class
-    correct_per_class = {i: 0 for i in range(numClasses)}
-    total_per_class = {i: 0 for i in range(numClasses)}
-    
-    with torch.no_grad():
-        for inputs, labels in dataLoader:
-            inputs = inputs.to(device)
-            labels = labels.to(device)
-            
-            outputs = model(inputs)
-            _, predicted = torch.max(outputs, 1)
-            
-            # Count correct predictions per class
-            for label, pred in zip(labels, predicted):
-                label_idx = label.item()
-                total_per_class[label_idx] += 1
-                if label_idx == pred.item():
-                    correct_per_class[label_idx] += 1
-    
-    # Calculate accuracies
-    classwise_acc = {}
-    print(f"\n{'='*50}")
-    print(f"Class-wise Accuracy")
-    print(f"{'='*50}")
-    print(f"{'Class':<10} {'Correct':<10} {'Total':<10} {'Accuracy':<10}")
-    print(f"{'-'*50}")
-    
-    total_correct = 0
-    total_samples = 0
-    
-    for cls in range(numClasses):
-        if total_per_class[cls] > 0:
-            acc = correct_per_class[cls] / total_per_class[cls]
-        else:
-            acc = 0.0
-        classwise_acc[cls] = acc
-        total_correct += correct_per_class[cls]
-        total_samples += total_per_class[cls]
-        
-        print(f"{cls:<10} {correct_per_class[cls]:<10} {total_per_class[cls]:<10} {acc:.4f}")
-    
-    overall_acc = total_correct / total_samples if total_samples > 0 else 0.0
-    print(f"{'-'*50}")
-    print(f"{'Overall':<10} {total_correct:<10} {total_samples:<10} {overall_acc:.4f}")
-    print(f"{'='*50}\n")
-    
-    return overall_acc, classwise_acc
