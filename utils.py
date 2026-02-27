@@ -14,10 +14,29 @@ def GetVoterValidation(batchSize):
     valLoader = DataLoader(valDataset, batch_size=batchSize, shuffle=False)
     return valLoader
 
-def GetVoterTrainingBalanced(batchSize, totalSamples, numClasses):
+def GetVoterTraining(batchSize):
     trainData = torch.load("./data/kaleel_final_dataset_train_OnlyBubbles_Grayscale.pth", weights_only=False)
     trainImages = trainData["data"].float()
     trainLabels = trainData["binary_labels"].long()
+    
+    trainDataset = TensorDataset(trainImages, trainLabels)
+    trainLoader = DataLoader(trainDataset, batch_size=batchSize, shuffle=True)
+    return trainLoader
+
+
+def GetVoterTrainingBalanced(batchSize, totalSamples, numClasses):
+    # Get all training data (shuffled) with same batchSize
+    fullTrainLoader = GetVoterTraining(batchSize=batchSize)
+    
+    # Collect all shuffled data from batches
+    allImages = []
+    allLabels = []
+    for images, labels in fullTrainLoader:
+        allImages.append(images)
+        allLabels.append(labels)
+    
+    trainImages = torch.cat(allImages, dim=0)
+    trainLabels = torch.cat(allLabels, dim=0)
     
     # Calculate samples per class
     samplesPerClass = totalSamples // numClasses
@@ -37,14 +56,12 @@ def GetVoterTrainingBalanced(batchSize, totalSamples, numClasses):
     for i in range(len(trainLabels)):
         label = int(trainLabels[i])
         
-        # Check if we still need samples from this class
         if classCount[label] < samplesPerClass:
             balancedImages[currentIndex] = trainImages[i]
             balancedLabels[currentIndex] = label
             classCount[label] += 1
             currentIndex += 1
         
-        # Check if we have enough samples
         if currentIndex >= totalSamples:
             break
     
@@ -60,6 +77,56 @@ def GetVoterTrainingBalanced(batchSize, totalSamples, numClasses):
     balancedLoader = DataLoader(balancedDataset, batch_size=batchSize, shuffle=True)
     
     return balancedLoader
+
+def LabelDataUsingOracle(oracle, dataLoader, device):
+    oracle.eval()
+    numSamples = len(dataLoader.dataset)
+    
+    # Collect all data, original labels, and predictions
+    all_inputs = []
+    all_original_labels = []
+    all_predictions = []
+    
+    with torch.no_grad():
+        for inputs, original_labels in dataLoader:
+            inputs = inputs.to(device)
+            outputs = oracle(inputs)
+            
+            # Get hard labels (argmax of predictions)
+            predictions = outputs.argmax(dim=1)
+            
+            all_inputs.append(inputs.cpu())
+            all_original_labels.append(original_labels.cpu())
+            all_predictions.append(predictions.cpu())
+    
+    # Concatenate all batches
+    xData = torch.cat(all_inputs, dim=0)
+    yOriginal = torch.cat(all_original_labels, dim=0)
+    yLabels = torch.cat(all_predictions, dim=0)
+    
+    # -------- LABEL COMPARISON STATISTICS --------
+    print("\n" + "-"*60)
+    print("LABEL COMPARISON STATISTICS")
+    
+    # Overall statistics
+    same_labels = (yOriginal == yLabels).sum().item()
+    different_labels = (yOriginal != yLabels).sum().item()
+    total_samples = len(yLabels)
+    
+    print(f"Total Samples: {total_samples}")
+    print(f"Labels Unchanged: {same_labels} ({100*same_labels/total_samples:.2f}%)")
+    print(f"Labels Changed:   {different_labels} ({100*different_labels/total_samples:.2f}%)")
+    print("-"*60)
+    
+    # Create new DataLoader with oracle labels
+    labeledDataset = TensorDataset(xData, yLabels)
+    dataLoaderLabeled = DataLoader(
+        labeledDataset, 
+        batch_size=dataLoader.batch_size, 
+        shuffle=True
+    )
+    
+    return dataLoaderLabeled
 
 # Calculate and print class-wise accuracy for a given model and dataloader
 def calculateClasswiseAccuracy(dataLoader, model, device, numClasses):

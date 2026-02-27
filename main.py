@@ -2,10 +2,17 @@ import torch
 
 from model_architecture import ResNet, cait, VGG, MultiOutputSVM, CarliniNetwork
 import AttackWrappersAdaptiveBlackBox
-import ModelFactory
+from ModelFactory import ModelFactory
 import utils
 
 def AdaptiveAttack():
+    # --------------- MODEL PATHS ------------------
+    resnet_C_path = "./checkpoint/ModelResNet20-VotingCombined-v2-Grayscale-Run1.th"
+    cait_C_path = "./checkpoint/ModelCaiT-trCombined-v2-valCombined-v2-Grayscale-Run1.th"
+    vgg_C_path = "./checkpoint/ModelVgg16-C2.th"
+    svm_C_base = "./checkpoint/sklearn_SVM_Combined_v2_Grayscale_Run1/base_pytorch_svm_combined_v2.pth"
+    svm_C_multi = "./checkpoint/sklearn_SVM_Combined_v2_Grayscale_Run1/multi_output_svm_combined_v2.pth"
+
     # ----------------- PARAMETERS --------------------
     batchSize = 64
     numClasses = 2
@@ -17,11 +24,18 @@ def AdaptiveAttack():
     saveTag ="Adaptive Attack"
     device = torch.device("cuda")
 
-    # ------------------ MODELS ------------------------
-    # Oracle
-    oracle = ModelFactory.ModelFactory().get_model('resnet', "./checkpoint/ModelResNet20-VotingCombined-v2-Grayscale-Run1.th")  # Resnet-C
-    # Synthetic Model
-    syntheticModel = ModelFactory.ModelFactory().get_model("vgg")  # VGG
+    # ------------------ ORACLE MODELS ------------------------
+    oracle = ModelFactory().get_model('resnet', resnet_C_path)
+    # oracle = ModelFactory().get_model('cait', cait_C_path)
+    # oracle = ModelFactory().get_model('vgg', vgg_C_path)
+    # oracle = ModelFactory().get_model('svm', [svm_C_base, svm_C_multi])# Synthetic Model
+
+    # ------------------ SYNTHETIC (UNTRAINED) MODELS ------------------------
+    # syntheticModel = ModelFactory().get_model('resnet')
+    # syntheticModel = ModelFactory().get_model('cait')
+    # syntheticModel = ModelFactory().get_model('vgg')
+    # syntheticModel = ModelFactory().get_model('svm')
+    syntheticModel = ModelFactory().get_model('carlini')
 
     # -------------- TRAINING & VALIDATION DATASET ------
     trainLoader = utils.GetVoterTrainingBalanced(batchSize, numTrainingSamples, numClasses)
@@ -43,14 +57,14 @@ def AdaptiveAttack():
     # -------------- ATTACK CONFIG (APGD DLR Attack) --------------------
     attack_config = {
         "numAttackSamples": 1000,
-        "epsForAttacks": 8/255,
+        "epsForAttacks": 16/255,
         "clipMin": 0.0,
         "clipMax": 1.0,
-        "etaStart": 2 * (8/255),
+        "etaStart": 2 * (16/255),
         "numSteps": 500,
     }
         
-    # Run the attack - using **config to unpack dictionary
+    # Run the attack
     AttackWrappersAdaptiveBlackBox.AdaptiveAttack(
         saveTag=saveTag,
         device=device,

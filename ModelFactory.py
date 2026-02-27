@@ -27,8 +27,10 @@ Usage Examples:
 
     # Without checkpoint (untrained model for training)
     model = ModelFactory().get_model("resnet")
+    model = ModelFactory().get_model("cait")
     model = ModelFactory().get_model("vgg")
     model = ModelFactory().get_model("carlini")
+    model = ModelFactory().get_model("svm")
 
 # --------------- Model PATHS for this repo------------------
 # ResNet model

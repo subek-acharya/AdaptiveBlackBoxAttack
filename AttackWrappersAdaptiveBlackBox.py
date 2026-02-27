@@ -1,5 +1,4 @@
 import torch
-from torch.utils.data import TensorDataset, DataLoader
 
 import APGDOriginal
 import AttackWrappersWhiteBoxP
@@ -49,37 +48,36 @@ def AdaptiveAttack(saveTag, device, oracle, syntheticModel, numClasses, training
 
     valAcc = utils.validateD(valLoader, oracle, device)
     print("ValLoader Accuracy on Oracle Model:", valAcc)  
+    print("\n" + "-"*60)
 
-    # # Do the Attack | APGD DLR Attack
-    # advLoaderAPGD = APGDOriginal.DLR_AutoAttackPytorchMatGPUWrapper(device, cleanLoader, syntheticModel, epsForAttacks, etaStart, numSteps, clipMin, clipMax)
+    # oracle_correctLoader = utils.GetCorrectlyIdentifiedSamplesBalanced(oracle, numAttackSamples, valLoader, numClasses)
+    correctLoader = utils.GetCorrectlyIdentifiedSamplesBalanced(syntheticModel, numAttackSamples, valLoader, numClasses)
+    
+    # Do the Attack | APGD DLR Attack
+    advLoaderAPGD = APGDOriginal.DLR_AutoAttackPytorchMatGPUWrapper(device, correctLoader, syntheticModel, epsForAttacks, etaStart, numSteps, clipMin, clipMax)
+
+    # Extract tensors from both dataloaders
+    xClean, _ = utils.DataLoaderToTensor(correctLoader)
+    xAdv, _ = utils.DataLoaderToTensor(advLoaderAPGD)
+    
+    # Compute max difference (L∞ norm)
+    diff = torch.max(torch.abs(xClean - xAdv))
+    print(f"Max (correctLoader - advLoaderAPGD): {diff}")
+
+    advAcc = utils.validateD(advLoaderAPGD, syntheticModel, device)
+    print("Sythetic Model Adversarial Acc on Synthetic adversarial loader:", advAcc)
+
+    utils.calculateClasswiseAccuracy(advLoaderAPGD, syntheticModel, device, numClasses)
+
+    # #Check the accuracy of the model on the adversarial examples 
+    advAcc_oracle_syn = utils.validateD(advLoaderAPGD, oracle, device)
+    print("Oracle Adversarial Acc on Synthetic adversarial loader:", advAcc_oracle_syn)
+
+    utils.calculateClasswiseAccuracy(advLoaderAPGD, oracle, device, numClasses)
 
     # # Save adversarial samples
     # torch.save(advLoaderAPGD, "./AdvLoaderAPGD")
     # torch.cuda.empty_cache()
-
-    # # Extract tensors from both dataloaders
-    # xClean, yClean = DMP.DataLoaderToTensor(cleanLoader)
-    # xAdv, yAdv = DMP.DataLoaderToTensor(advLoaderAPGD)
-    
-    # # Compute max difference (L∞ norm)
-    # diff = torch.max(torch.abs(xClean - xAdv))
-    # print(f"Max (cleanLoader - advLoaderAPGD): {diff}")
-
-    # # ADDED: Evaluate adversarial robustness on synthetic model
-    # robustAccSynthetic = DMP.validateD(advLoaderAPGD, syntheticModel, device)
-    # print("Robust Accuracy APGD-DLR on synthetic Model :", robustAccSynthetic)
-
-    # # Classwise Accuracy for advLoaderAPGD on Synthetic Model
-    # print("ClasswiseAccuracy advLoaderAPGD Accuracy on Synthetic Model")
-    # DMP.calculateClasswiseAccuracy(advLoaderAPGD, syntheticModel, device, numClasses)
-    
-    # # Evaluate on oracle
-    # robustAccAPGD = DMP.validateD(advLoaderAPGD, oracle, device)
-    # print("Robust Accuracy APGD-DLR on Oracle", robustAccAPGD)
-
-    # # Classwise Accuracy for advLoaderAPGD on Oracle
-    # print("ClasswiseAccuracy advLoaderAPGD Accuracy on Oracle")
-    # DMP.calculateClasswiseAccuracy(advLoaderAPGD, oracle, device, numClasses)
     
     # print("Queries used:", queryCounter)
     # # Write the results to text file 
@@ -92,7 +90,7 @@ def AdaptiveAttack(saveTag, device, oracle, syntheticModel, numClasses, training
 
 def TrainSyntheticModel(saveDir, device, oracle, syntheticModel, numIterations, epochsPerIteration, epsForAug, learningRate, optimizerName, trainDataLoader, numClasses, clipMin, clipMax):
     # First re-label the training data according to the oracle 
-    trainDataLoader = LabelDataUsingOracle(oracle, trainDataLoader, device)
+    trainDataLoader = utils.LabelDataUsingOracle(oracle, trainDataLoader, device)
     # Setup the training parameters 
     criterion = torch.nn.CrossEntropyLoss()
     # Check what optimizer to use
@@ -108,7 +106,7 @@ def TrainSyntheticModel(saveDir, device, oracle, syntheticModel, numIterations, 
     giantDataLoader.AddLoader("OriginalLoader", trainDataLoader)
     # Do one round of training with the currently labeled training data 
     TrainingStep(device, syntheticModel, giantDataLoader, epochsPerIteration, criterion, optimizer)
-    # # Data augmentation and training steps 
+    # Data augmentation and training steps 
     # for i in range(0, numIterations):
     #     print("Running synthetic model training iteration =", i)
     #     # Create the synthetic data using FGSM and the synthetic model 
@@ -122,7 +120,7 @@ def TrainSyntheticModel(saveDir, device, oracle, syntheticModel, numIterations, 
     #         # Memory clean up 
     #         del currentLoader
     #         # Label the synthetic data using the oracle 
-    #         syntheticDataLoader = LabelDataUsingOracle(oracle, syntheticDataLoaderUnlabeled, numClasses, device)
+    #         syntheticDataLoader = utils.LabelDataUsingOracle(oracle, syntheticDataLoaderUnlabeled, device)
     #         # Memory clean up
     #         del syntheticDataLoaderUnlabeled
     #         giantDataLoader.AddLoader("DataLoader,iteration=" + str(i) + "batch=" + str(j), syntheticDataLoader)          
@@ -159,52 +157,3 @@ def TrainingStep(device, model, giantDataLoader, numEpochs, criterion, optimizer
         del targetVar
         torch.cuda.empty_cache()
 
-def LabelDataUsingOracle(oracle, dataLoader, device):
-    oracle.eval()
-    numSamples = len(dataLoader.dataset)
-    
-    # Collect all data, original labels, and predictions
-    all_inputs = []
-    all_original_labels = []
-    all_predictions = []
-    
-    with torch.no_grad():
-        for inputs, original_labels in dataLoader:
-            inputs = inputs.to(device)
-            outputs = oracle(inputs)
-            
-            # Get hard labels (argmax of predictions)
-            predictions = outputs.argmax(dim=1)
-            
-            all_inputs.append(inputs.cpu())
-            all_original_labels.append(original_labels.cpu())
-            all_predictions.append(predictions.cpu())
-    
-    # Concatenate all batches
-    xData = torch.cat(all_inputs, dim=0)
-    yOriginal = torch.cat(all_original_labels, dim=0)
-    yLabels = torch.cat(all_predictions, dim=0)
-    
-    # -------- LABEL COMPARISON STATISTICS --------
-    print("\n" + "-"*60)
-    print("LABEL COMPARISON STATISTICS (Original vs Oracle)")
-    
-    # Overall statistics
-    same_labels = (yOriginal == yLabels).sum().item()
-    different_labels = (yOriginal != yLabels).sum().item()
-    total_samples = len(yLabels)
-    
-    print(f"Total Samples: {total_samples}")
-    print(f"Labels Unchanged: {same_labels} ({100*same_labels/total_samples:.2f}%)")
-    print(f"Labels Changed:   {different_labels} ({100*different_labels/total_samples:.2f}%)")
-    print("-"*60)
-    
-    # Create new DataLoader with oracle labels
-    labeledDataset = TensorDataset(xData, yLabels)
-    dataLoaderLabeled = DataLoader(
-        labeledDataset, 
-        batch_size=dataLoader.batch_size, 
-        shuffle=True
-    )
-    
-    return dataLoaderLabeled
