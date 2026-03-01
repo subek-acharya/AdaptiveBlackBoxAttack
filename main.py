@@ -46,7 +46,7 @@ def AdaptiveAttack():
         "batchSize": batchSize,
         "numIterations": 4,
         "epochsPerIteration": 10,
-        "epsForAug": 0.1,
+        "epsForAug": 0.031,
         "learningRate": 0.0001,
         "numTrainingSamples": numTrainingSamples,
         "dataLoaderForTraining": trainLoader,
@@ -57,10 +57,10 @@ def AdaptiveAttack():
     # -------------- ATTACK CONFIG (APGD DLR Attack) --------------------
     attack_config = {
         "numAttackSamples": 1000,
-        "epsForAttacks": 16/255,
+        "epsForAttacks": 255/255,
         "clipMin": 0.0,
         "clipMax": 1.0,
-        "etaStart": 2 * (16/255),
+        "etaStart": 2 * (255/255),
         "numSteps": 500,
     }
         
