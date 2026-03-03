@@ -20,7 +20,7 @@ def GetVoterTraining(batchSize):
     trainLabels = trainData["binary_labels"].long()
     
     trainDataset = TensorDataset(trainImages, trainLabels)
-    trainLoader = DataLoader(trainDataset, batch_size=batchSize, shuffle=True)
+    trainLoader = DataLoader(trainDataset, batch_size=batchSize, shuffle=False)
     return trainLoader
 
 
@@ -74,7 +74,7 @@ def GetVoterTrainingBalanced(batchSize, totalSamples, numClasses):
     
     # Create dataloader
     balancedDataset = TensorDataset(balancedImages, balancedLabels.long())
-    balancedLoader = DataLoader(balancedDataset, batch_size=batchSize, shuffle=True)
+    balancedLoader = DataLoader(balancedDataset, batch_size=batchSize, shuffle=False)
     
     return balancedLoader
 
@@ -218,6 +218,7 @@ def validateD(valLoader, model, device=None):
     return acc
 
 def GetCorrectlyIdentifiedSamplesBalanced(model, totalSamplesRequired, dataLoader, numClasses, device=None):
+    model.eval()
     sampleShape = GetOutputShape(dataLoader)
     xData, yData = DataLoaderToTensor(dataLoader)
     #Basic error checking 

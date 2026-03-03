@@ -49,6 +49,9 @@ def AdaptiveAttack(saveTag, device, oracle, syntheticModel, numClasses, training
     TrainSyntheticModel("./", device, oracle, syntheticModel, numIterations, epochsPerIteration, epsForAug, learningRate, optimizerName, dataLoaderForTraining, numClasses, clipMin, clipMax)
     torch.save(syntheticModel, "./SyntheticModel")
 
+    # Training completed, switch to evaluation mode
+    syntheticModel.eval()
+
     valAcc = utils.validateD(valLoader, syntheticModel, device)
     print("ValLoader Accuracy on Synthetic Model:", valAcc)  
 
@@ -115,27 +118,27 @@ def TrainSyntheticModel(saveDir, device, oracle, syntheticModel, numIterations, 
     # Do one round of training with the currently labeled training data 
     TrainingStep(device, syntheticModel, giantDataLoader, epochsPerIteration, criterion, optimizer)
     # Data augmentation and training steps 
-    for i in range(0, numIterations):
-        print("Running synthetic model training iteration =", i)
-        # Create the synthetic data using FGSM and the synthetic model 
-        numDataLoaders = giantDataLoader.GetNumberOfLoaders()  # Find out how many loaders we have to iterate over
-        # Go through and generate adversarial examples for each dataloader
-        print("=Step 0: Generating data loaders...")
-        for j in range(0, numDataLoaders):
-            print("--Generating data loader=", j)
-            currentLoader = giantDataLoader.GetLoaderAtIndex(j)
-            syntheticDataLoaderUnlabeled = AttackWrappersWhiteBoxP.FGSMNativePytorch(device, currentLoader, syntheticModel, epsForAug, clipMin, clipMax, targeted=False)
-            # Memory clean up 
-            del currentLoader
-            # Label the synthetic data using the oracle 
-            syntheticDataLoader = LabelDataUsingOracle(oracle, syntheticDataLoaderUnlabeled, device)
-            # Memory clean up
-            del syntheticDataLoaderUnlabeled
-            giantDataLoader.AddLoader("DataLoader,iteration=" + str(i) + "batch=" + str(j), syntheticDataLoader)          
-        # Combine the new synthetic data loader and the original data loader
-        print("=Step 1: Training the synthetic model...")
-        # Train on the new data 
-        TrainingStep(device, syntheticModel, giantDataLoader, epochsPerIteration, criterion, optimizer)
+    # for i in range(0, numIterations):
+    #     print("Running synthetic model training iteration =", i)
+    #     # Create the synthetic data using FGSM and the synthetic model 
+    #     numDataLoaders = giantDataLoader.GetNumberOfLoaders()  # Find out how many loaders we have to iterate over
+    #     # Go through and generate adversarial examples for each dataloader
+    #     print("=Step 0: Generating data loaders...")
+    #     for j in range(0, numDataLoaders):
+    #         print("--Generating data loader=", j)
+    #         currentLoader = giantDataLoader.GetLoaderAtIndex(j)
+    #         syntheticDataLoaderUnlabeled = AttackWrappersWhiteBoxP.FGSMNativePytorch(device, currentLoader, syntheticModel, epsForAug, clipMin, clipMax, targeted=False)
+    #         # Memory clean up 
+    #         del currentLoader
+    #         # Label the synthetic data using the oracle 
+    #         syntheticDataLoader = LabelDataUsingOracle(oracle, syntheticDataLoaderUnlabeled, device)
+    #         # Memory clean up
+    #         del syntheticDataLoaderUnlabeled
+    #         giantDataLoader.AddLoader("DataLoader,iteration=" + str(i) + "batch=" + str(j), syntheticDataLoader)          
+    #     # Combine the new synthetic data loader and the original data loader
+    #     print("=Step 1: Training the synthetic model...")
+    #     # Train on the new data 
+    #     TrainingStep(device, syntheticModel, giantDataLoader, epochsPerIteration, criterion, optimizer)
 
 
 # Try to match Keras "fit" function as closely as possible 

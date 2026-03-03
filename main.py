@@ -31,12 +31,12 @@ def AdaptiveAttack():
     # oracle = ModelFactory().get_model('svm', [svm_C_base, svm_C_multi])# Synthetic Model
 
     # ------------------ SYNTHETIC (UNTRAINED) MODELS ------------------------
+    syntheticModel = ModelFactory().get_model('carlini')
     # syntheticModel = ModelFactory().get_model('resnet')
     # syntheticModel = ModelFactory().get_model('cait')
     # syntheticModel = ModelFactory().get_model('vgg')
     # syntheticModel = ModelFactory().get_model('svm')
-    syntheticModel = ModelFactory().get_model('carlini')
-
+    
     # -------------- TRAINING & VALIDATION DATASET ------
     trainLoader = utils.GetVoterTrainingBalanced(batchSize, numTrainingSamples, numClasses)
     valLoader = utils.GetVoterValidation(batchSize)
