@@ -4,6 +4,19 @@ from model_architecture import ResNet, cait, VGG, MultiOutputSVM, CarliniNetwork
 import AttackWrappersAdaptiveBlackBox
 from ModelFactory import ModelFactory
 import utils
+import random
+
+seed = 20
+torch.manual_seed(seed)
+torch.cuda.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+random.seed(seed)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
+RANDOM_OFFSET = 270000  
+_ = torch.randn(RANDOM_OFFSET)
+del _
 
 def AdaptiveAttack():
     # --------------- MODEL PATHS ------------------
@@ -17,18 +30,10 @@ def AdaptiveAttack():
     batchSize = 64
     numClasses = 2
     inputImageSize = [1, 1, 40, 50]
-    dropOutRate = 0.0
-    imgH, imgW = 40, 50
     numTrainingSamples = 2000
     
     saveTag ="Adaptive Attack"
     device = torch.device("cuda")
-
-    # ------------------ ORACLE MODELS ------------------------
-    oracle = ModelFactory().get_model('resnet', resnet_C_path)
-    # oracle = ModelFactory().get_model('cait', cait_C_path)
-    # oracle = ModelFactory().get_model('vgg', vgg_C_path)
-    # oracle = ModelFactory().get_model('svm', [svm_C_base, svm_C_multi])# Synthetic Model
 
     # ------------------ SYNTHETIC (UNTRAINED) MODELS ------------------------
     syntheticModel = ModelFactory().get_model('carlini')
@@ -36,7 +41,13 @@ def AdaptiveAttack():
     # syntheticModel = ModelFactory().get_model('cait')
     # syntheticModel = ModelFactory().get_model('vgg')
     # syntheticModel = ModelFactory().get_model('svm')
-    
+
+    # ------------------ ORACLE MODELS ------------------------
+    # oracle = ModelFactory().get_model('resnet', resnet_C_path)
+    oracle = ModelFactory().get_model('cait', cait_C_path)
+    # oracle = ModelFactory().get_model('vgg', vgg_C_path)
+    # oracle = ModelFactory().get_model('svm', [svm_C_base, svm_C_multi])
+
     # -------------- TRAINING & VALIDATION DATASET ------
     trainLoader = utils.GetVoterTrainingBalanced(batchSize, numTrainingSamples, numClasses)
     valLoader = utils.GetVoterValidation(batchSize)
@@ -46,7 +57,7 @@ def AdaptiveAttack():
         "batchSize": batchSize,
         "numIterations": 4,
         "epochsPerIteration": 10,
-        "epsForAug": 0.031,
+        "epsForAug": 0.01,
         "learningRate": 0.0001,
         "numTrainingSamples": numTrainingSamples,
         "dataLoaderForTraining": trainLoader,
@@ -57,10 +68,17 @@ def AdaptiveAttack():
     # -------------- ATTACK CONFIG (APGD DLR Attack) --------------------
     attack_config = {
         "numAttackSamples": 1000,
-        "epsForAttacks": 255/255,
+        "epsForAttacks": {
+            "eps_4_255": 4/255,
+            "eps_8_255": 8/255,
+            "eps_16_255": 16/255,
+            "eps_32_255": 32/255,
+            "eps_64_255": 64/255,
+            "eps_255_255": 255/255,
+        },
         "clipMin": 0.0,
         "clipMax": 1.0,
-        "etaStart": 2 * (255/255),
+        "etaMultiplier": 2,  # etaStart = etaMultiplier * eps_value
         "numSteps": 500,
     }
         
@@ -74,7 +92,7 @@ def AdaptiveAttack():
         training_config=training_config,
         attack_config=attack_config
     )
-    
+
 def main():
     # Run the adaptive black-box attack
     AdaptiveAttack()

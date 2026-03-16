@@ -23,10 +23,10 @@ def AdaptiveAttack(saveTag, device, oracle, syntheticModel, numClasses, training
     
     # Unpack attack config
     numAttackSamples = attack_config["numAttackSamples"]
-    epsForAttacks = attack_config["epsForAttacks"]
+    epsForAttacks = attack_config["epsForAttacks"] # Dictionary of epsilon values
     clipMin = attack_config["clipMin"]
     clipMax = attack_config["clipMax"]
-    etaStart = attack_config["etaStart"]
+    etaMultiplier = attack_config["etaMultiplier"]
     numSteps = attack_config["numSteps"]
     
     #Create place to save all files
@@ -47,57 +47,95 @@ def AdaptiveAttack(saveTag, device, oracle, syntheticModel, numClasses, training
     
     # Train Synthetic Model 
     TrainSyntheticModel("./", device, oracle, syntheticModel, numIterations, epochsPerIteration, epsForAug, learningRate, optimizerName, dataLoaderForTraining, numClasses, clipMin, clipMax)
-    torch.save(syntheticModel, "./SyntheticModel")
+    torch.save(syntheticModel, "./SyntheticModel_Carlini_CaiT-C")
 
     # Training completed, switch to evaluation mode
     syntheticModel.eval()
 
-    valAcc = utils.validateD(valLoader, syntheticModel, device)
-    print("ValLoader Accuracy on Synthetic Model:", valAcc)  
+    Synthetic_valAcc = utils.validateD(valLoader, syntheticModel, device)
+    print("ValLoader Accuracy on Synthetic Model:", Synthetic_valAcc)  
 
-    valAcc = utils.validateD(valLoader, oracle, device)
-    print("ValLoader Accuracy on Oracle Model:", valAcc)  
+    Oracle_valAcc = utils.validateD(valLoader, oracle, device)
+    print("ValLoader Accuracy on Oracle Model:", Oracle_valAcc)  
     print("\n" + "-"*60)
-
-    # oracle_correctLoader = utils.GetCorrectlyIdentifiedSamplesBalanced(oracle, numAttackSamples, valLoader, numClasses)
-    correctLoader = utils.GetCorrectlyIdentifiedSamplesBalanced(syntheticModel, numAttackSamples, valLoader, numClasses)
-    
-    # Do the Attack | APGD DLR Attack
-    advLoaderAPGD = APGDOriginal.DLR_AutoAttackPytorchMatGPUWrapper(device, correctLoader, syntheticModel, epsForAttacks, etaStart, numSteps, clipMin, clipMax)
-
-    # Extract tensors from both dataloaders
-    xClean, _ = utils.DataLoaderToTensor(correctLoader)
-    xAdv, _ = utils.DataLoaderToTensor(advLoaderAPGD)
-    
-    # Compute max difference (L∞ norm)
-    diff = torch.max(torch.abs(xClean - xAdv))
-    print(f"Max (correctLoader - advLoaderAPGD): {diff}")
-
-    advAcc = utils.validateD(advLoaderAPGD, syntheticModel, device)
-    print("Sythetic Model Adversarial Acc on Synthetic adversarial loader:", advAcc)
-
-    utils.calculateClasswiseAccuracy(advLoaderAPGD, syntheticModel, device, numClasses)
-
-    # #Check the accuracy of the model on the adversarial examples 
-    advAcc_oracle_syn = utils.validateD(advLoaderAPGD, oracle, device)
-    print("Oracle Adversarial Acc on Synthetic adversarial loader:", advAcc_oracle_syn)
-
-    utils.calculateClasswiseAccuracy(advLoaderAPGD, oracle, device, numClasses)
 
     print("Queries used:", queryCounter)
 
-    # # Save adversarial samples
-    # torch.save(advLoaderAPGD, "./AdvLoaderAPGD")
-    # torch.cuda.empty_cache()
+    # Write validation accuracies to file
+    resultsTextFile.write("="*70 + "\n")
+    resultsTextFile.write("Validation accuracy after training\n")
+    resultsTextFile.write("="*70 + "\n")
+    resultsTextFile.write(f"ValLoader Accuracy on Synthetic Model: {Synthetic_valAcc:.4f}\n")
+    resultsTextFile.write(f"ValLoader Accuracy on Oracle Model: {Oracle_valAcc:.4f}\n")
+    resultsTextFile.write("="*70 + "\n\n")
+    resultsTextFile.write(f"Query Used: {queryCounter}\n")
+    resultsTextFile.write("="*70 + "\n\n")
+
+    # Create correctLoader for attack
+    correctLoader = utils.GetCorrectlyIdentifiedSamplesBalanced(oracle, numAttackSamples, valLoader, numClasses)
+
+    # ----------  LOOP THROUGH MULTIPLE EPSILON VALUES ----------
+    results_summary = {}
     
-    # print("Queries used:", queryCounter)
-    # # Write the results to text file 
-    # resultsTextFile.write("---- ValLoader Accuracy on Synthetic Model:" + str(valAcc) + "\n")
-    # resultsTextFile.write("---- Robust Accuracy APGD-DLR on synthetic Model:" + str(robustAccSynthetic) + "\n")
-    # resultsTextFile.write("---- Robust Accuracy APGD-DLR on Oracle:" + str(robustAccAPGD) + "\n")
-    # resultsTextFile.write("---- Queries used:" + str(queryCounter) + "\n")
-    # resultsTextFile.close()  # Close the results file at the end 
-    # os.chdir("..")  # Move up one directory to return to original directory 
+    for eps_name, eps_value in epsForAttacks.items():
+        # Calculate dynamic etaStart = 2 * eps_value
+        etaStart = etaMultiplier * eps_value
+        
+        # Do the Attack | APGD DLR Attack
+        advLoaderAPGD = APGDOriginal.DLR_AutoAttackPytorchMatGPUWrapper(
+            device, correctLoader, syntheticModel, eps_value, etaStart, numSteps, clipMin, clipMax
+        )
+
+        # Extract tensors from both dataloaders
+        xClean, _ = utils.DataLoaderToTensor(correctLoader)
+        xAdv, _ = utils.DataLoaderToTensor(advLoaderAPGD)
+        
+        # Compute max difference (L∞ norm)
+        diff = torch.max(torch.abs(xClean - xAdv))
+        print(f"Max (correctLoader - advLoaderAPGD): {diff:.6f}")
+
+        # ------- SYNTHETIC MODEL EVALUATION ---------
+        advAcc = utils.validateD(advLoaderAPGD, syntheticModel, device)
+        print(f"\n[SYNTHETIC MODEL] Adversarial Accuracy: {advAcc:.4f}")
+        utils.calculateClasswiseAccuracy(advLoaderAPGD, syntheticModel, device, numClasses)
+
+        # -------- ORACLE MODEL EVALUATION ----------
+        advAcc_oracle = utils.validateD(advLoaderAPGD, oracle, device)
+        print(f"\n[ORACLE MODEL] Adversarial Accuracy: {advAcc_oracle:.4f}")
+        utils.calculateClasswiseAccuracy(advLoaderAPGD, oracle, device, numClasses)
+
+        # --------- SAVE ADVERSARIAL SAMPLES ---------
+        save_adv_samples(
+            adv_loader=advLoaderAPGD,
+            model=syntheticModel,
+            eps_value=eps_value,
+            n_save=1000
+        )
+
+        # Store results
+        results_summary[eps_name] = {
+            "eps_value": eps_value,
+            "eta_start": etaStart,
+            "linf_distance": diff.item(),
+            "synthetic_acc": advAcc,
+            "oracle_acc": advAcc_oracle
+        }
+
+    # -------- Write results to file ==============
+    resultsTextFile.write("\n\n" + "="*70 + "\n")
+    resultsTextFile.write("COMPREHENSIVE RESULTS SUMMARY\n")
+    resultsTextFile.write("="*70 + "\n")
+    resultsTextFile.write(f"{'Epsilon':<15} {'Value':<12} {'etaStart':<12} {'L∞ Dist':<12} {'Syn Acc':<12} {'Oracle Acc':<12}\n")
+    resultsTextFile.write("-"*70 + "\n")
+    
+    for eps_name, results in results_summary.items():
+        resultsTextFile.write(f"{eps_name:<15} {results['eps_value']:<12.6f} {results['eta_start']:<12.6f} "
+                             f"{results['linf_distance']:<12.6f} {results['synthetic_acc']:<12.4f} {results['oracle_acc']:<12.4f}\n")
+    
+    resultsTextFile.write("-"*70 + "\n")
+    resultsTextFile.close()
+    
+    os.chdir("..")
 
 def TrainSyntheticModel(saveDir, device, oracle, syntheticModel, numIterations, epochsPerIteration, epsForAug, learningRate, optimizerName, trainDataLoader, numClasses, clipMin, clipMax):
     # First re-label the training data according to the oracle 
@@ -118,27 +156,27 @@ def TrainSyntheticModel(saveDir, device, oracle, syntheticModel, numIterations, 
     # Do one round of training with the currently labeled training data 
     TrainingStep(device, syntheticModel, giantDataLoader, epochsPerIteration, criterion, optimizer)
     # Data augmentation and training steps 
-    # for i in range(0, numIterations):
-    #     print("Running synthetic model training iteration =", i)
-    #     # Create the synthetic data using FGSM and the synthetic model 
-    #     numDataLoaders = giantDataLoader.GetNumberOfLoaders()  # Find out how many loaders we have to iterate over
-    #     # Go through and generate adversarial examples for each dataloader
-    #     print("=Step 0: Generating data loaders...")
-    #     for j in range(0, numDataLoaders):
-    #         print("--Generating data loader=", j)
-    #         currentLoader = giantDataLoader.GetLoaderAtIndex(j)
-    #         syntheticDataLoaderUnlabeled = AttackWrappersWhiteBoxP.FGSMNativePytorch(device, currentLoader, syntheticModel, epsForAug, clipMin, clipMax, targeted=False)
-    #         # Memory clean up 
-    #         del currentLoader
-    #         # Label the synthetic data using the oracle 
-    #         syntheticDataLoader = LabelDataUsingOracle(oracle, syntheticDataLoaderUnlabeled, device)
-    #         # Memory clean up
-    #         del syntheticDataLoaderUnlabeled
-    #         giantDataLoader.AddLoader("DataLoader,iteration=" + str(i) + "batch=" + str(j), syntheticDataLoader)          
-    #     # Combine the new synthetic data loader and the original data loader
-    #     print("=Step 1: Training the synthetic model...")
-    #     # Train on the new data 
-    #     TrainingStep(device, syntheticModel, giantDataLoader, epochsPerIteration, criterion, optimizer)
+    for i in range(0, numIterations):
+        print("Running synthetic model training iteration =", i)
+        # Create the synthetic data using FGSM and the synthetic model 
+        numDataLoaders = giantDataLoader.GetNumberOfLoaders()  # Find out how many loaders we have to iterate over
+        # Go through and generate adversarial examples for each dataloader
+        print("=Step 0: Generating data loaders...")
+        for j in range(0, numDataLoaders):
+            print("--Generating data loader=", j)
+            currentLoader = giantDataLoader.GetLoaderAtIndex(j)
+            syntheticDataLoaderUnlabeled = AttackWrappersWhiteBoxP.FGSMNativePytorch(device, currentLoader, syntheticModel, epsForAug, clipMin, clipMax, targeted=False)
+            # Memory clean up 
+            del currentLoader
+            # Label the synthetic data using the oracle 
+            syntheticDataLoader = LabelDataUsingOracle(oracle, syntheticDataLoaderUnlabeled, device)
+            # Memory clean up
+            del syntheticDataLoaderUnlabeled
+            giantDataLoader.AddLoader("DataLoader,iteration=" + str(i) + "batch=" + str(j), syntheticDataLoader)          
+        # Combine the new synthetic data loader and the original data loader
+        print("=Step 1: Training the synthetic model...")
+        # Train on the new data 
+        TrainingStep(device, syntheticModel, giantDataLoader, epochsPerIteration, criterion, optimizer)
 
 
 # Try to match Keras "fit" function as closely as possible 
@@ -217,8 +255,30 @@ def LabelDataUsingOracle(oracle, dataLoader, device):
     dataLoaderLabeled = DataLoader(
         labeledDataset, 
         batch_size=dataLoader.batch_size, 
-        shuffle=True
+        shuffle=False
     )
     
     return dataLoaderLabeled
+
+def save_adv_samples(adv_loader, model, eps_value, n_save=1000):
+    base_dir = os.path.join("adv_samples", "adaptive_apgd", model.__class__.__name__)
+    os.makedirs(base_dir, exist_ok=True)
+
+    filename = f"adaptive_apgd_eps={int(eps_value * 255)}by255.pt"
+    save_path = os.path.join(base_dir, filename)
+
+    imgs, lbls = [], []
+    count = 0
+    for x, y in adv_loader:
+        imgs.append(x.cpu())
+        lbls.append(y.cpu())
+        count += x.size(0)
+        if count >= n_save:
+            break
+
+    final_imgs = torch.cat(imgs)[:n_save]
+    final_lbls = torch.cat(lbls)[:n_save]
+    torch.save({"images": final_imgs, "labels": final_lbls}, save_path)
+    print(f"Saved {final_imgs.shape[0]} adversarial samples to {save_path}")
+
 
