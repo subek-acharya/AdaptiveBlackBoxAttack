@@ -12,7 +12,7 @@ Supported Models:
     ----------------|-------------------|---------------------------
     ResNet20        | "resnet"          | str (single path)
     CaiT            | "cait"            | str (single path)
-    VGG16           | "vgg"             | str (single path)
+    VGG16           | "vgg16"           | str (single path)
     CarliniNetwork  | "carlini"         | str (single path)
     Multi-Output SVM| "svm"             | List[str] (two paths: [base_path, multi_path])
 
@@ -63,7 +63,9 @@ class ModelFactory:
             return self._create_resnet(checkpoint_path)
         elif "cait" in model_name:
             return self._create_cait(checkpoint_path)
-        elif "vgg" in model_name:
+        elif "vgg11" in model_name:
+            return self._create_vgg11(checkpoint_path)
+        elif "vgg16" in model_name:
             return self._create_vgg16(checkpoint_path)
         elif "carlini" in model_name:
             return self._create_carlini(checkpoint_path)
@@ -132,20 +134,34 @@ class ModelFactory:
         
         return model
 
-    def _create_vgg16(
+    def _create_vgg11(
         self, 
         checkpoint_path: Optional[str] = None, 
         num_classes=2
     ) -> nn.Module:
-        model = VGG.VGG("VGG16", 40, 50, num_classes).to(self.device)
-
+        
+        model = VGG.VGG("VGG11", 40, 50, num_classes).to(self.device)
         if checkpoint_path is not None:
             raw = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
             state = raw.get("state_dict", raw)
             state = {(k[7:] if k.startswith("module.") else k): v for k, v in state.items()}
             model.load_state_dict(state, strict=False)
             model.eval()
+        return model
+
+    def _create_vgg16(
+        self, 
+        checkpoint_path: Optional[str] = None, 
+        num_classes=2
+    ) -> nn.Module:
         
+        model = VGG.VGG("VGG16", 40, 50, num_classes).to(self.device)
+        if checkpoint_path is not None:
+            raw = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            state = raw.get("state_dict", raw)
+            state = {(k[7:] if k.startswith("module.") else k): v for k, v in state.items()}
+            model.load_state_dict(state, strict=False)
+            model.eval()
         return model
 
     def _create_carlini(

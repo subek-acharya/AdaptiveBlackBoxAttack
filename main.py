@@ -14,10 +14,6 @@ random.seed(seed)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-RANDOM_OFFSET = 270000  
-_ = torch.randn(RANDOM_OFFSET)
-del _
-
 def AdaptiveAttack():
     # --------------- MODEL PATHS ------------------
     resnet_C_path = "./checkpoint/ModelResNet20-VotingCombined-v2-Grayscale-Run1.th"
@@ -36,16 +32,13 @@ def AdaptiveAttack():
     device = torch.device("cuda")
 
     # ------------------ SYNTHETIC (UNTRAINED) MODELS ------------------------
-    syntheticModel = ModelFactory().get_model('carlini')
-    # syntheticModel = ModelFactory().get_model('resnet')
-    # syntheticModel = ModelFactory().get_model('cait')
-    # syntheticModel = ModelFactory().get_model('vgg')
-    # syntheticModel = ModelFactory().get_model('svm')
+    # syntheticModel = ModelFactory().get_model('carlini')
+    syntheticModel = ModelFactory().get_model('vgg11')
 
     # ------------------ ORACLE MODELS ------------------------
-    # oracle = ModelFactory().get_model('resnet', resnet_C_path)
-    oracle = ModelFactory().get_model('cait', cait_C_path)
-    # oracle = ModelFactory().get_model('vgg', vgg_C_path)
+    oracle = ModelFactory().get_model('resnet', resnet_C_path)
+    # oracle = ModelFactory().get_model('cait', cait_C_path)
+    # oracle = ModelFactory().get_model('vgg16', vgg_C_path)
     # oracle = ModelFactory().get_model('svm', [svm_C_base, svm_C_multi])
 
     # -------------- TRAINING & VALIDATION DATASET ------
@@ -69,12 +62,12 @@ def AdaptiveAttack():
     attack_config = {
         "numAttackSamples": 1000,
         "epsForAttacks": {
-            "eps_4_255": 4/255,
-            "eps_8_255": 8/255,
-            "eps_16_255": 16/255,
-            "eps_32_255": 32/255,
-            "eps_64_255": 64/255,
             "eps_255_255": 255/255,
+            "eps_64_255": 64/255,
+            "eps_32_255": 32/255,
+            "eps_16_255": 16/255,
+            "eps_8_255": 8/255,
+            "eps_4_255": 4/255,
         },
         "clipMin": 0.0,
         "clipMax": 1.0,
