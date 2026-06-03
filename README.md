@@ -146,3 +146,5 @@ L0_PGD_PARAMS = {
 - [3] Croce, F., & Hein, M. (2021). [Mind the Box: L1-APGD for Sparse Adversarial Attacks on Image Classifiers](https://arxiv.org/abs/2103.01208). In *International Conference on Machine Learning (ICML)*, pages 2201–2211, PMLR.
 
 - [4] Croce, F., & Hein, M. (2019). [Sparse and Imperceivable Adversarial Attacks](https://arxiv.org/abs/1909.05040). In *Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)*, pages 4724–4732.
+
+- [5] Mahmood, K., Nguyen, P. H., Nguyen, L. M., Nguyen, T., & Van Dijk, M. (2022). [Besting the Black-Box: Barrier Zones for Adversarial Example Defense](https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=9663375). *IEEE Access*, 10, 1451–1474.
