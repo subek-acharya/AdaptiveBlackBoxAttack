@@ -1,190 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
-import os
-
-# ------------ Voters specific utils -----------------
-
-def GetVoterValidation(batchSize):
-    valData = torch.load("./data/kaleel_final_dataset_val_OnlyBubbles_Grayscale.pth", weights_only=False)
-    valImages = valData["data"].float()
-    valLabels = valData["binary_labels"].long()
-    
-    valDataset = TensorDataset(valImages, valLabels)
-    valLoader = DataLoader(valDataset, batch_size=batchSize, shuffle=False)
-    return valLoader
-
-def GetVoterValidationCombined(batchSize):
-    valData = torch.load("./data/kaleel_final_dataset_val_Combined_Grayscale.pth", weights_only=False)
-    valImages = valData["data"].float()
-    valLabels = valData["binary_labels"].long()
-    
-    valDataset = TensorDataset(valImages, valLabels)
-    valLoader = DataLoader(valDataset, batch_size=batchSize, shuffle=False)
-    return valLoader
-
-def GetVoterTraining(batchSize):
-    trainData = torch.load("./data/kaleel_final_dataset_train_OnlyBubbles_Grayscale.pth", weights_only=False)
-    trainImages = trainData["data"].float()
-    trainLabels = trainData["binary_labels"].long()
-    
-    trainDataset = TensorDataset(trainImages, trainLabels)
-    trainLoader = DataLoader(trainDataset, batch_size=batchSize, shuffle=False)
-    return trainLoader
-
-def GetVoterTrainingCombined(batchSize):
-    trainData = torch.load("./data/kaleel_final_dataset_train_Combined_Grayscale.pth", weights_only=False)
-    trainImages = trainData["data"].float()
-    trainLabels = trainData["binary_labels"].long()
-    
-    trainDataset = TensorDataset(trainImages, trainLabels)
-    trainLoader = DataLoader(trainDataset, batch_size=batchSize, shuffle=True)
-    return trainLoader
-
-
-def GetVoterTrainingBalanced(batchSize, totalSamples, numClasses):
-    # Get all training data (shuffled) with same batchSize
-    fullTrainLoader = GetVoterTraining(batchSize=batchSize)
-    
-    # Collect all shuffled data from batches
-    allImages = []
-    allLabels = []
-    for images, labels in fullTrainLoader:
-        allImages.append(images)
-        allLabels.append(labels)
-    
-    trainImages = torch.cat(allImages, dim=0)
-    trainLabels = torch.cat(allLabels, dim=0)
-    
-    # Calculate samples per class
-    samplesPerClass = totalSamples // numClasses
-    
-    # Get shape of images
-    imgShape = trainImages[0].shape
-    
-    # Initialize tensors for balanced data
-    balancedImages = torch.zeros(totalSamples, imgShape[0], imgShape[1], imgShape[2])
-    balancedLabels = torch.zeros(totalSamples)
-    
-    # Track how many samples we've collected per class
-    classCount = torch.zeros(numClasses)
-    
-    # Collect balanced samples
-    currentIndex = 0
-    for i in range(len(trainLabels)):
-        label = int(trainLabels[i])
-        
-        if classCount[label] < samplesPerClass:
-            balancedImages[currentIndex] = trainImages[i]
-            balancedLabels[currentIndex] = label
-            classCount[label] += 1
-            currentIndex += 1
-        
-        if currentIndex >= totalSamples:
-            break
-    
-    # Verify we got enough samples
-    for c in range(numClasses):
-        if classCount[c] != samplesPerClass:
-            raise ValueError(f"Not enough samples for class {c}. Got {int(classCount[c])}, needed {samplesPerClass}")
-    
-    print(f"Balanced training data: {totalSamples} samples ({samplesPerClass} per class)")
-    
-    # Create dataloader
-    balancedDataset = TensorDataset(balancedImages, balancedLabels.long())
-    balancedLoader = DataLoader(balancedDataset, batch_size=batchSize, shuffle=False)
-    
-    return balancedLoader
-
-# Calculate and print class-wise accuracy for a given model and dataloader
-def calculateClasswiseAccuracy(dataLoader, model, device, numClasses):
-    model.eval()
-    
-    # Initialize counters for each class
-    correct_per_class = {i: 0 for i in range(numClasses)}
-    total_per_class = {i: 0 for i in range(numClasses)}
-    
-    with torch.no_grad():
-        for inputs, labels in dataLoader:
-            inputs = inputs.to(device)
-            labels = labels.to(device)
-            
-            outputs = model(inputs)
-            _, predicted = torch.max(outputs, 1)
-            
-            # Count correct predictions per class
-            for label, pred in zip(labels, predicted):
-                label_idx = label.item()
-                total_per_class[label_idx] += 1
-                if label_idx == pred.item():
-                    correct_per_class[label_idx] += 1
-    
-    # Calculate accuracies
-    classwise_acc = {}
-    print(f"\n{'='*50}")
-    print(f"Class-wise Accuracy")
-    print(f"{'='*50}")
-    print(f"{'Class':<10} {'Correct':<10} {'Total':<10} {'Accuracy':<10}")
-    print(f"{'-'*50}")
-    
-    total_correct = 0
-    total_samples = 0
-    
-    for cls in range(numClasses):
-        if total_per_class[cls] > 0:
-            acc = correct_per_class[cls] / total_per_class[cls]
-        else:
-            acc = 0.0
-        classwise_acc[cls] = acc
-        total_correct += correct_per_class[cls]
-        total_samples += total_per_class[cls]
-        
-        print(f"{cls:<10} {correct_per_class[cls]:<10} {total_per_class[cls]:<10} {acc:.4f}")
-    
-    overall_acc = total_correct / total_samples if total_samples > 0 else 0.0
-    print(f"{'-'*50}")
-    print(f"{'Overall':<10} {total_correct:<10} {total_samples:<10} {overall_acc:.4f}")
-    print(f"{'='*50}\n")
-    
-    return overall_acc, classwise_acc
-
-# Scanned bubble data loader
-def get_scanned_attack_loader(dataset_path, batch_size):
-    """
-    Load scanned bubble dataset for attack in UNet+Model mode.
-    
-    Args:
-        dataset_path: Path to scanned bubble dataset
-        batch_size: Batch size for dataloader
-    
-    Returns:
-        DataLoader with scanned bubble samples
-    """
-    if not os.path.exists(dataset_path):
-        raise FileNotFoundError(f"Scanned dataset not found: {dataset_path}")
-    
-    data = torch.load(dataset_path, weights_only=False)
-    
-    # Handle different data formats
-    if "xData" in data:
-        images = data["xData"].float()
-        labels = data["yDataBinary"].long()
-    elif "data" in data:
-        images = data["data"].float()
-        labels = data["binary_labels"].long()
-    else:
-        raise ValueError(f"Unknown data format. Keys: {list(data.keys())}")
-    
-    print(f"    Loaded {len(images)} scanned samples")
-    print(f"    Shape: {images.shape}")
-    print(f"    Labels: {torch.bincount(labels).tolist()}")
-    
-    dataset = TensorDataset(images, labels)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-    
-    return loader
-# --------------------------------------------
 
 #Convert a dataloader into x and y tensors 
 def DataLoaderToTensor(dataLoader):
@@ -220,14 +36,50 @@ def TensorToDataLoader(xData, yData, transforms= None, batchSize=None, randomize
 
 def TensorToNumpy(x_tensor, y_tensor):
     x_numpy = x_tensor.cpu().numpy()
-    y_numpy = y_tensor.cpu().numpy().astype(np.int64)
+    x_numpy = x_numpy.transpose(0, 2, 3, 1)  # NCHW -> NHWC
+    
+    y_numpy = y_tensor.cpu().numpy()
+    y_numpy = y_numpy.astype(np.int64)
+    
     return x_numpy, y_numpy
 
 def NumpyToTensor(x_numpy, y_numpy):
+    # NHWC -> NCHW (reverse of TensorToNumpy)
+    x_numpy = x_numpy.transpose(0, 3, 1, 2)
+    
     x_tensor = torch.from_numpy(x_numpy).float()
-    y_tensor = torch.from_numpy(y_numpy).long()  # long is int64
+    y_tensor = torch.from_numpy(y_numpy).long()
+    
     return x_tensor, y_tensor
 
+def get_predictions(model, x_nat, y_nat, device):
+    x = torch.from_numpy(x_nat).permute(0, 3, 1, 2).float().to(device)
+    y = torch.from_numpy(y_nat).to(device)
+    with torch.no_grad():
+        output = model(x)
+    
+    return (output.max(dim=-1)[1] == y).cpu().numpy()
+
+def get_predictions_and_gradients(model, x_nat, y_nat, device):
+    x = torch.from_numpy(x_nat).permute(0, 3, 1, 2).float().to(device)
+    x.requires_grad_()
+    y = torch.from_numpy(y_nat).to(device)
+
+    with torch.enable_grad():
+        output = model(x)
+
+        # Cross Entropy loss function
+        # loss = nn.CrossEntropyLoss()(output, y)
+
+        # DLR Loss Function
+        loss = dlr_loss(output, y).mean()  # Take mean to get scalar loss value
+
+    grad = torch.autograd.grad(loss, x)[0]
+    grad = grad.detach().permute(0, 2, 3, 1).cpu().numpy()
+
+    pred = (output.detach().max(dim=-1)[1] == y).detach().cpu().numpy()
+
+    return pred, grad
 
 # Find the actual min and max pixel values in the dataset
 def GetDataBounds(dataLoader, device):
@@ -273,7 +125,6 @@ def validateD(valLoader, model, device=None):
     return acc
 
 def GetCorrectlyIdentifiedSamplesBalanced(model, totalSamplesRequired, dataLoader, numClasses, device=None):
-    model.eval()
     sampleShape = GetOutputShape(dataLoader)
     xData, yData = DataLoaderToTensor(dataLoader)
     #Basic error checking 
@@ -343,6 +194,35 @@ def predictD(dataLoader, numClasses, model, device=None):
                 yPred[indexer] = output[j]
                 indexer = indexer + 1 #update the indexer regardless 
     return yPred
+
+def print_per_class_robust_accuracy(all_labels, all_robust_acc):
+    unique_labels = np.unique(all_labels)
+    
+    print(f"\n{'='*70}")
+    print(f"Per-Class Robust Accuracy:")
+    print(f"{'='*70}\n")
+    
+    for label in unique_labels:
+        # Get indices for this class
+        class_indices = (all_labels == label)
+        class_total = np.sum(class_indices)
+        class_robust = np.sum(all_robust_acc[class_indices])
+        class_robust_acc = (class_robust / class_total) * 100.0
+        
+        print(f"Class {int(label)}:")
+        print(f"  Total samples: {class_total}")
+        print(f"  Correctly classified after attack: {int(class_robust)}")
+        print(f"  Robust Accuracy: {class_robust_acc:.2f}%")
+        print(f"{'-'*70}")
+    
+    print(f"{'='*70}\n")
+
+# DLR Loss Function
+def dlr_loss(x, y):
+    x_sorted, ind_sorted = x.sort(dim=1)
+    ind = (ind_sorted[:, -1] == y).float()
+    u = torch.arange(x.shape[0])
+    return -(x[u, y] - x_sorted[:, -2] * ind - x_sorted[:, -1] * (1. - ind))
 
 #Class to help with converting between dataloader and pytorch tensor 
 class MyDataSet(torch.utils.data.Dataset):

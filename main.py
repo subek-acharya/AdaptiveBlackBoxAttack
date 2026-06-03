@@ -1,54 +1,133 @@
+# AdaptiveAttack.py
+
+"""
+Adaptive Black Box Attack - Compatible with Model Only AND UNet+Model Mode
+
+This script attacks oracle models using a synthetic VGG11 model for transfer.
+Supports both:
+  - Model Only: Uses original validation data for attack
+  - UNet+Model: Uses scanned bubble data for attack (with UNet denoiser)
+  
+Training always uses voter training data.
+"""
+
 import torch
-
-from model_architecture import ResNet, cait, VGG, MultiOutputSVM, CarliniNetwork
-import AttackWrappersAdaptiveBlackBox
-from ModelFactory import ModelFactory
-import utils
 import random
+import os
+from torch.utils.data import DataLoader, TensorDataset
 
-seed = 20
-torch.manual_seed(seed)
-torch.cuda.manual_seed(seed)
-torch.cuda.manual_seed_all(seed)
-random.seed(seed)
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
+from ModelFactory import ModelFactory
+import AttackWrappersAdaptiveBlackBox
+import utils
+from constants import (
+    CHECKPOINTS,
+    UNET_CHECKPOINT,
+    EXPERIMENTS_ALL,
+    EXPERIMENTS_UNET_ALL,
+    EXPERIMENTS_SNN_RESNET20
+)
 
-def AdaptiveAttack():
-    # --------------- MODEL PATHS ------------------
-    resnet_C_path = "./checkpoint/ModelResNet20-VotingCombined-v2-Grayscale-Run1.th"
-    cait_C_path = "./checkpoint/ModelCaiT-trCombined-v2-valCombined-v2-Grayscale-Run1.th"
-    vgg_C_path = "./checkpoint/ModelVgg16-C2.th"
-    svm_C_base = "./checkpoint/sklearn_SVM_Combined_v2_Grayscale_Run1/base_pytorch_svm_combined_v2.pth"
-    svm_C_multi = "./checkpoint/sklearn_SVM_Combined_v2_Grayscale_Run1/multi_output_svm_combined_v2.pth"
+# ------ Setting seed for reproducibility -------
+SEED = 20
 
-    # ----------------- PARAMETERS --------------------
+def reset_seed(seed=SEED):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+# Set seed at module load
+reset_seed()
+
+# ------- SYTHETIC MODEL AND ORACLE CONFIGURATION ------------
+
+# Synthetic model for transfer attack (VGG11 - will be trained, no checkpoint needed)
+SYNTHETIC_MODEL = "vgg11"
+
+# Choose experiment mode: "model_only" or "unet"
+ATTACK_MODE = "model_only"  # for Model only attacks
+# ATTACK_MODE = "unet"        # for UNet+Model attacks
+
+# For Attack mode = model_only
+EXPERIMENTS_MODEL_ONLY = EXPERIMENTS_ALL
+
+# For Attack mode = unet (UNet+Model attacks)
+# EXPERIMENTS_UNET_MODE = EXPERIMENTS_UNET_ALL
+
+# -------- ATTACK FUNCTION -----------
+
+def run_attack_on_oracle(model_name: str, config: dict, synthetic_model_name: str):
+    """
+    Run adaptive black box attack on a single oracle model.
+    
+    Args:
+        model_name: Name of the oracle model
+        config: Configuration dict with ckpt_path, dataset_path, use_unet, etc.
+        synthetic_model_name: Name of synthetic model for transfer (e.g., "vgg11")
+    """
+
+    # ------ Seed is reset in each indvidual oracle model initiation for reproducibility -----
+    reset_seed(SEED)
+    
+    # Parameters
     batchSize = 64
     numClasses = 2
-    inputImageSize = [1, 1, 40, 50]
     numTrainingSamples = 2000
+    numAttackSamples = 500
     
-    saveTag ="Adaptive Attack"
-    device = torch.device("cuda")
-
-    # ------------------ SYNTHETIC (UNTRAINED) MODELS ------------------------
-    # syntheticModel = ModelFactory().get_model('carlini')
-    syntheticModel = ModelFactory().get_model('vgg11')
-
-    # ------------------ ORACLE MODELS ------------------------
-    oracle = ModelFactory().get_model('resnet', resnet_C_path)
-    # oracle = ModelFactory().get_model('cait', cait_C_path)
-    # oracle = ModelFactory().get_model('vgg16', vgg_C_path)
-    # oracle = ModelFactory().get_model('svm', [svm_C_base, svm_C_multi])
-
-    # -------------- TRAINING & VALIDATION DATASET ------
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Extract config
+    use_unet = config.get("use_unet", False)
+    model_ckpt = config["ckpt_path"]
+    dataset_path = config["dataset_path"]  # Scanned data path for UNet mode
+    unet_ckpt = config.get("unet_ckpt", UNET_CHECKPOINT) if use_unet else None
+    
+    mode_str = "UNet+Model" if use_unet else "Model Only"
+    
+    print(f"Oracle model: {model_name} ({mode_str})", flush=True)
+    print(f"Synthetic model: {synthetic_model_name} (will be trained)", flush=True)
+    
+    # Load models
+    factory = ModelFactory(device=device)
+    
+    # Load synthetic model (VGG11 - untrained, no checkpoint)
+    syntheticModel = factory.get_model(synthetic_model_name)
+    
+    # Load oracle model (with or without UNet wrapper)
+    if use_unet:
+        oracle = factory.get_unet_model_wrapper(
+            model_name=model_name,
+            model_checkpoint=model_ckpt,
+            unet_checkpoint=unet_ckpt,
+        )
+    else:
+        oracle = factory.get_model(model_name, model_ckpt)
+    
+    # Create save tag
+    unet_suffix = "_unet" if use_unet else ""
+    saveTag = f"Adaptive_Attack_Oracle={model_name}{unet_suffix}_Synthetic={synthetic_model_name}"
+    
+    #-------------- DATA LOADERS ---------------
+    
+    # Training & Validation Dataloaders
     trainLoader = utils.GetVoterTrainingBalanced(batchSize, numTrainingSamples, numClasses)
     valLoader = utils.GetVoterValidation(batchSize)
     
-    # -------------- TRAINING CONFIG ------------------
+    # Attack dataloder
+    if use_unet:
+        # UNet+Model: Use scanned bubble data for attack
+        attackLoader = utils.get_scanned_attack_loader(dataset_path, batchSize)
+    else:
+        # Model Only: Use valLoader data for attack
+        attackLoader = utils.GetVoterValidation(batchSize) 
+    
+    # Training config
     training_config = {
         "batchSize": batchSize,
-        "numIterations": 4,
+        "numIterations": 4,    
         "epochsPerIteration": 10,
         "epsForAug": 0.01,
         "learningRate": 0.0001,
@@ -56,39 +135,60 @@ def AdaptiveAttack():
         "dataLoaderForTraining": trainLoader,
         "valLoader": valLoader,
         "optimizerName": "adam",
-    }
-    
-    # -------------- ATTACK CONFIG (APGD DLR Attack) --------------------
-    attack_config = {
-        "numAttackSamples": 1000,
-        "epsForAttacks": {
-            "eps_255_255": 255/255,
-            "eps_64_255": 64/255,
-            "eps_32_255": 32/255,
-            "eps_16_255": 16/255,
-            "eps_8_255": 8/255,
-            "eps_4_255": 4/255,
-        },
         "clipMin": 0.0,
         "clipMax": 1.0,
-        "etaMultiplier": 2,  # etaStart = etaMultiplier * eps_value
-        "numSteps": 500,
     }
-        
-    # Run the attack
-    AttackWrappersAdaptiveBlackBox.AdaptiveAttack(
-        saveTag=saveTag,
-        device=device,
-        oracle=oracle,
-        syntheticModel=syntheticModel,
-        numClasses=numClasses,
-        training_config=training_config,
-        attack_config=attack_config
-    )
+    
+    # Run attack
+    try:
+        AttackWrappersAdaptiveBlackBox.AdaptiveAttack(
+            saveTag=saveTag,
+            device=device,
+            oracle=oracle,
+            syntheticModel=syntheticModel,
+            numClasses=numClasses,
+            training_config=training_config,
+            numAttackSamples=numAttackSamples,
+            attackLoader=attackLoader,
+        )
+        print(f"Attack completed for {model_name}", flush=True)
+        return True
+    except Exception as e:
+        print(f"Attack failed for {model_name}: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        return False
 
 def main():
-    # Run the adaptive black-box attack
-    AdaptiveAttack()
+    # Select experiments based on mode
+    if ATTACK_MODE == "unet":
+        experiments = EXPERIMENTS_UNET_MODE
+        mode_name = "UNet+Model"
+        results_file = "adaptive_unet_results.txt"
+    else:
+        experiments = EXPERIMENTS_MODEL_ONLY
+        mode_name = "Model Only"
+        results_file = "adaptive_results.txt"
+    
+    results = {}
+    
+    for model_name, config in experiments.items():
+        success = run_attack_on_oracle(
+            model_name=model_name,
+            config=config,
+            synthetic_model_name=SYNTHETIC_MODEL,
+        )
+        results[model_name] = "Success" if success else "Failed"
+    
+    # Save results
+    with open(results_file, "a", encoding="utf-8") as f:
+        header = f" ADAPTIVE BLACK BOX ATTACK ({mode_name}) RESULTS "
+        f.write("\n" + "=" * 10 + header + "=" * 10 + "\n")
+        for model, status in results.items():
+            use_unet = experiments[model].get("use_unet", False)
+            unet_suffix = "_unet" if use_unet else ""
+            f.write(f"{model}{unet_suffix:<40}: {status}\n")
+
 
 if __name__ == '__main__':
     main()

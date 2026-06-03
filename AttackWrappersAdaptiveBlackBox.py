@@ -1,16 +1,16 @@
 import torch
 from torch.utils.data import TensorDataset, DataLoader
 
-import APGDOriginal
-import AttackWrappersWhiteBoxP
+from attacks.linf_attack import FGSM
 from DataLoaderGiant import DataLoaderGiant
 import utils
+import AttackRunner
 
 from datetime import date
 import os 
 global queryCounter
 
-def AdaptiveAttack(saveTag, device, oracle, syntheticModel, numClasses, training_config, attack_config):
+def AdaptiveAttack(saveTag, device, oracle, syntheticModel, numClasses, training_config, numAttackSamples, attackLoader):
     
     # Unpack training config
     numIterations = training_config["numIterations"]
@@ -20,14 +20,8 @@ def AdaptiveAttack(saveTag, device, oracle, syntheticModel, numClasses, training
     optimizerName = training_config["optimizerName"]
     dataLoaderForTraining = training_config["dataLoaderForTraining"]
     valLoader = training_config["valLoader"]
-    
-    # Unpack attack config
-    numAttackSamples = attack_config["numAttackSamples"]
-    epsForAttacks = attack_config["epsForAttacks"] # Dictionary of epsilon values
-    clipMin = attack_config["clipMin"]
-    clipMax = attack_config["clipMax"]
-    etaMultiplier = attack_config["etaMultiplier"]
-    numSteps = attack_config["numSteps"]
+    clipMin = training_config["clipMin"]
+    clipMax = training_config["clipMax"]
     
     #Create place to save all files
     today = date.today()
@@ -44,10 +38,13 @@ def AdaptiveAttack(saveTag, device, oracle, syntheticModel, numClasses, training
     # Define Query Counter
     global queryCounter
     queryCounter = 0
+
+    # -------------------------------- TRAINING AND EVALUATION ------------------------------------------
     
     # Train Synthetic Model 
+    print("Phase 1: Train Synthetic Model")
     TrainSyntheticModel("./", device, oracle, syntheticModel, numIterations, epochsPerIteration, epsForAug, learningRate, optimizerName, dataLoaderForTraining, numClasses, clipMin, clipMax)
-    torch.save(syntheticModel, "./SyntheticModel_Carlini_CaiT-C")
+    torch.save(syntheticModel, f"./SyntheticModel_{saveTag}")
 
     # Training completed, switch to evaluation mode
     syntheticModel.eval()
@@ -71,71 +68,31 @@ def AdaptiveAttack(saveTag, device, oracle, syntheticModel, numClasses, training
     resultsTextFile.write(f"Query Used: {queryCounter}\n")
     resultsTextFile.write("="*70 + "\n\n")
 
+    # ---------------------------------- ATTACK AND EVALUATION -------------------------------------------
+
+    print("Phase 2: Adversarial Attacks")
     # Create correctLoader for attack
-    correctLoader = utils.GetCorrectlyIdentifiedSamplesBalanced(oracle, numAttackSamples, valLoader, numClasses)
-
-    # ----------  LOOP THROUGH MULTIPLE EPSILON VALUES ----------
-    results_summary = {}
+    correctLoader = utils.GetCorrectlyIdentifiedSamplesBalanced(oracle, numAttackSamples, attackLoader, numClasses)
     
-    for eps_name, eps_value in epsForAttacks.items():
-        # Calculate dynamic etaStart = 2 * eps_value
-        etaStart = etaMultiplier * eps_value
-        
-        # Do the Attack | APGD DLR Attack
-        advLoaderAPGD = APGDOriginal.DLR_AutoAttackPytorchMatGPUWrapper(
-            device, correctLoader, syntheticModel, eps_value, etaStart, numSteps, clipMin, clipMax
-        )
+    # Run all attacks
+    all_results = AttackRunner.run_all_attacks(
+        device=device,
+        oracle=oracle,
+        synthetic_model=syntheticModel,
+        correct_loader=correctLoader,
+        num_classes=numClasses,
+        results_file=resultsTextFile
+    )
 
-        # Extract tensors from both dataloaders
-        xClean, _ = utils.DataLoaderToTensor(correctLoader)
-        xAdv, _ = utils.DataLoaderToTensor(advLoaderAPGD)
-        
-        # Compute max difference (L∞ norm)
-        diff = torch.max(torch.abs(xClean - xAdv))
-        print(f"Max (correctLoader - advLoaderAPGD): {diff:.6f}")
-
-        # ------- SYNTHETIC MODEL EVALUATION ---------
-        advAcc = utils.validateD(advLoaderAPGD, syntheticModel, device)
-        print(f"\n[SYNTHETIC MODEL] Adversarial Accuracy: {advAcc:.4f}")
-        utils.calculateClasswiseAccuracy(advLoaderAPGD, syntheticModel, device, numClasses)
-
-        # -------- ORACLE MODEL EVALUATION ----------
-        advAcc_oracle = utils.validateD(advLoaderAPGD, oracle, device)
-        print(f"\n[ORACLE MODEL] Adversarial Accuracy: {advAcc_oracle:.4f}")
-        utils.calculateClasswiseAccuracy(advLoaderAPGD, oracle, device, numClasses)
-
-        # --------- SAVE ADVERSARIAL SAMPLES ---------
-        save_adv_samples(
-            adv_loader=advLoaderAPGD,
-            model=syntheticModel,
-            eps_value=eps_value,
-            n_save=1000
-        )
-
-        # Store results
-        results_summary[eps_name] = {
-            "eps_value": eps_value,
-            "eta_start": etaStart,
-            "linf_distance": diff.item(),
-            "synthetic_acc": advAcc,
-            "oracle_acc": advAcc_oracle
-        }
-
-    # -------- Write results to file ==============
-    resultsTextFile.write("\n\n" + "="*70 + "\n")
-    resultsTextFile.write("COMPREHENSIVE RESULTS SUMMARY\n")
-    resultsTextFile.write("="*70 + "\n")
-    resultsTextFile.write(f"{'Epsilon':<15} {'Value':<12} {'etaStart':<12} {'L∞ Dist':<12} {'Syn Acc':<12} {'Oracle Acc':<12}\n")
-    resultsTextFile.write("-"*70 + "\n")
-    
-    for eps_name, results in results_summary.items():
-        resultsTextFile.write(f"{eps_name:<15} {results['eps_value']:<12.6f} {results['eta_start']:<12.6f} "
-                             f"{results['linf_distance']:<12.6f} {results['synthetic_acc']:<12.4f} {results['oracle_acc']:<12.4f}\n")
-    
-    resultsTextFile.write("-"*70 + "\n")
     resultsTextFile.close()
-    
     os.chdir("..")
+    
+    print("\n" + "="*70)
+    print("EXPERIMENT COMPLETE!")
+    print("="*70)
+    
+    return all_results
+
 
 def TrainSyntheticModel(saveDir, device, oracle, syntheticModel, numIterations, epochsPerIteration, epsForAug, learningRate, optimizerName, trainDataLoader, numClasses, clipMin, clipMax):
     # First re-label the training data according to the oracle 
@@ -165,7 +122,7 @@ def TrainSyntheticModel(saveDir, device, oracle, syntheticModel, numIterations, 
         for j in range(0, numDataLoaders):
             print("--Generating data loader=", j)
             currentLoader = giantDataLoader.GetLoaderAtIndex(j)
-            syntheticDataLoaderUnlabeled = AttackWrappersWhiteBoxP.FGSMNativePytorch(device, currentLoader, syntheticModel, epsForAug, clipMin, clipMax, targeted=False)
+            syntheticDataLoaderUnlabeled = FGSM.FGSMNativePytorch(device, currentLoader, syntheticModel, epsForAug, clipMin, clipMax, targeted=False)
             # Memory clean up 
             del currentLoader
             # Label the synthetic data using the oracle 
@@ -177,7 +134,6 @@ def TrainSyntheticModel(saveDir, device, oracle, syntheticModel, numIterations, 
         print("=Step 1: Training the synthetic model...")
         # Train on the new data 
         TrainingStep(device, syntheticModel, giantDataLoader, epochsPerIteration, criterion, optimizer)
-
 
 # Try to match Keras "fit" function as closely as possible 
 def TrainingStep(device, model, giantDataLoader, numEpochs, criterion, optimizer):
@@ -236,7 +192,7 @@ def LabelDataUsingOracle(oracle, dataLoader, device):
     yOriginal = torch.cat(all_original_labels, dim=0)
     yLabels = torch.cat(all_predictions, dim=0)
     
-    # -------- LABEL COMPARISON STATISTICS --------
+    # ----------------- LABEL COMPARISON STATISTICS -----------------
     print("\n" + "-"*60)
     print("LABEL COMPARISON STATISTICS")
     
@@ -259,26 +215,3 @@ def LabelDataUsingOracle(oracle, dataLoader, device):
     )
     
     return dataLoaderLabeled
-
-def save_adv_samples(adv_loader, model, eps_value, n_save=1000):
-    base_dir = os.path.join("adv_samples", "adaptive_apgd", model.__class__.__name__)
-    os.makedirs(base_dir, exist_ok=True)
-
-    filename = f"adaptive_apgd_eps={int(eps_value * 255)}by255.pt"
-    save_path = os.path.join(base_dir, filename)
-
-    imgs, lbls = [], []
-    count = 0
-    for x, y in adv_loader:
-        imgs.append(x.cpu())
-        lbls.append(y.cpu())
-        count += x.size(0)
-        if count >= n_save:
-            break
-
-    final_imgs = torch.cat(imgs)[:n_save]
-    final_lbls = torch.cat(lbls)[:n_save]
-    torch.save({"images": final_imgs, "labels": final_lbls}, save_path)
-    print(f"Saved {final_imgs.shape[0]} adversarial samples to {save_path}")
-
-
