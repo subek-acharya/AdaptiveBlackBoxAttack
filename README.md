@@ -4,7 +4,7 @@ Adaptive black-box adversarial attack framework for evaluating robustness of bal
 
 ## Overview
 
-In this attack framework, the adversary has access to part of the training data and query access to the target model (oracle), receiving only hard-label predictions. The adversary queries the oracle to label training data, trains an independent synthetic classifier (VGG11), and then executes white-box attacks on the synthetic model — leveraging full parameter access — to craft adversarial examples that transfer to the oracle model.
+In this attack framework, the adversary has access to part of the training data and query access to the target model (oracle), receiving only hard-label predictions. The adversary queries the oracle to label training data, trains an independent synthetic classifier (VGG11), and then executes white-box attacks on the synthetic model, leveraging full parameter access, to craft adversarial examples that transfer to the oracle model.
 
 This approach is based on the substitute model methodology introduced by Papernot et al. [1], extended with iterative data augmentation and six diverse white-box attacks spanning L∞, L2, L1, and L0 perturbation norms.
 
@@ -16,8 +16,6 @@ This approach is based on the substitute model methodology introduced by Paperno
 | Query Access | Hard-label predictions only (predicted class) |
 | Training Data | Partial access to original training data |
 | Goal | Generate adversarial examples that fool the oracle |
-
-## Attack Pipeline
 
 
 ## Attacks Implemented
