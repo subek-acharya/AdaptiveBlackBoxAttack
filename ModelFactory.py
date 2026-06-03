@@ -375,7 +375,7 @@ class ModelFactory:
         
         Directory structure:
         Thesis/
-        ├── Linf-BlackBoxAttack/
+        ├── AdaptiveBlackBoxAttack/
         │   └── ModelFactory.py       ← We are here (self.base_dir)
         └── Explanaible_AI/
             ├── cosine-is-almost/
