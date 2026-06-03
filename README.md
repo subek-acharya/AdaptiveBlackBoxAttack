@@ -22,12 +22,12 @@ This approach is based on the substitute model methodology introduced by Paperno
 
 | Attack | Norm |
 |--------|------|
-| APGD-L∞ (ATA-L∞) | L∞ |
-| APGD-L2 (ATA-L2) | L2 |
-| APGD-L1 (ATA-L1) | L1 |
-| L0-PGD (ATA-L0) | L0 |
-| L0+Lσ-PGD (ATA-L0+Lσ) | L0 |
-| L0+L∞-PGD (ATA-L0+L∞) | L0+L∞ |
+| APGD-L∞ | L∞ |
+| APGD-L2  | L2 |
+| APGD-L1  | L1 |
+| L0-PGD  | L0 |
+| L0+Lσ-PGD  | L0 |
+| L0+L∞-PGD | L0+L∞ |
 
 
 ## Oracle
